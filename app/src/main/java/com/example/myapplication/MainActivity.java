@@ -31,8 +31,6 @@ import android.widget.Toast;
 
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.camera.core.Camera;
-import androidx.camera.core.CameraControl;
-import androidx.camera.core.CameraInfo;
 import androidx.camera.core.CameraSelector;
 import androidx.camera.core.FocusMeteringAction;
 import androidx.camera.core.ImageAnalysis;
@@ -61,8 +59,8 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Date;
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -80,12 +78,10 @@ public class MainActivity extends AppCompatActivity {
 
     private static final int PERMISSION_CODE = 101;
 
-    // ================== আপনার গুগল শিটের পাবলিশড CSV লিংক ==================
     private static final String STOCK_SHEET_CSV_URL =
             "https://docs.google.com/spreadsheets/d/e/2PACX-1vR5RLl9fVBxpbJ-8O3BZllSRQy_1XV3tRJoqyofjThOMGBhAM1Ef6OuJ3rLr41AYAkK64a3KC6s5k_r/pub?gid=0&single=true&output=csv";
     private static final String PURCHASE_SHEET_CSV_URL =
             "https://docs.google.com/spreadsheets/d/e/2PACX-1vQ9h4YoDux9zsT9Ig-GGgx360QNYBvjYeuoGY_PfSECKoh6yuar9kCdOkzG2xs61O5qNqVsrIAjFPt0/pub?gid=0&single=true&output=csv";
-    // ======================================================================
 
     private PreviewView previewView;
     private TextView tvLastScanned, tvStockCount;
@@ -99,7 +95,6 @@ public class MainActivity extends AppCompatActivity {
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
 
     private final Set<String> scannedChassisSet = new HashSet<>();
-
     private List<ScannedModel> stockMatchList = new ArrayList<>();
     private List<ScannedModel> purchaseMatchList = new ArrayList<>();
     private List<ScannedModel> unknownList = new ArrayList<>();
@@ -110,7 +105,6 @@ public class MainActivity extends AppCompatActivity {
 
     private boolean isScannerOn = true;
     private boolean isWaitingForNextScan = false;
-
     private Camera camera;
     private ScaleGestureDetector scaleGestureDetector;
 
@@ -167,6 +161,13 @@ public class MainActivity extends AppCompatActivity {
         checkPermissions();
 
         btnAddManual.setOnClickListener(v -> {
+            String location = etLocation.getText().toString().trim();
+            if (TextUtils.isEmpty(location)) {
+                Toast.makeText(this, "আগে Location লিখুন!", Toast.LENGTH_SHORT).show();
+                etLocation.requestFocus();
+                return;
+            }
+
             String chassis = etManualChassis.getText().toString().trim().toUpperCase(Locale.getDefault());
             if (!TextUtils.isEmpty(chassis)) {
                 if (scannedChassisSet.contains(chassis)) {
@@ -175,6 +176,8 @@ public class MainActivity extends AppCompatActivity {
                     processAndSaveChassis(chassis);
                     etManualChassis.setText("");
                 }
+            } else {
+                Toast.makeText(this, "Chassis Number লিখুন!", Toast.LENGTH_SHORT).show();
             }
         });
 
@@ -196,18 +199,12 @@ public class MainActivity extends AppCompatActivity {
         setupPinchToZoomAndFocus();
     }
 
-    // =====================================================================
-    // ১) উন্নত অটো-সাজেশন (শেষের ডিজিট দিয়েও খুঁজবে)
-    // =====================================================================
     private void setupManualEntryAutoSuggest() {
         ChassisSuggestionAdapter adapter = new ChassisSuggestionAdapter(this, allSheetChassisForSuggestion);
         etManualChassis.setAdapter(adapter);
         etManualChassis.setThreshold(1);
-
         etManualChassis.setOnFocusChangeListener((v, hasFocus) -> {
-            if (hasFocus && !allSheetChassisForSuggestion.isEmpty()) {
-                etManualChassis.showDropDown();
-            }
+            if (hasFocus && !allSheetChassisForSuggestion.isEmpty()) etManualChassis.showDropDown();
         });
         etManualChassis.setOnClickListener(v -> {
             if (!allSheetChassisForSuggestion.isEmpty()) etManualChassis.showDropDown();
@@ -219,7 +216,6 @@ public class MainActivity extends AppCompatActivity {
         etManualChassis.setAdapter(adapter);
     }
 
-    // কাস্টম অ্যাডাপ্টার — contains দিয়ে ম্যাচ করে (শেষের ডিজিটও কাজ করবে)
     private static class ChassisSuggestionAdapter extends ArrayAdapter<String> {
         private final List<String> originalList;
         private List<String> filteredList;
@@ -230,15 +226,8 @@ public class MainActivity extends AppCompatActivity {
             this.filteredList = new ArrayList<>(items);
         }
 
-        @Override
-        public int getCount() {
-            return filteredList.size();
-        }
-
-        @Override
-        public String getItem(int position) {
-            return filteredList.get(position);
-        }
+        @Override public int getCount() { return filteredList.size(); }
+        @Override public String getItem(int position) { return filteredList.get(position); }
 
         @Override
         public Filter getFilter() {
@@ -247,13 +236,11 @@ public class MainActivity extends AppCompatActivity {
                 protected FilterResults performFiltering(CharSequence constraint) {
                     FilterResults results = new FilterResults();
                     List<String> suggestions = new ArrayList<>();
-
                     if (constraint == null || constraint.length() == 0) {
                         suggestions.addAll(originalList);
                     } else {
                         String filterPattern = constraint.toString().toUpperCase(Locale.getDefault()).trim();
                         for (String chassis : originalList) {
-                            // যেকোনো জায়গায় মিললেই সাজেস্ট করবে (শেষের ডিজিটসহ)
                             if (chassis.toUpperCase(Locale.getDefault()).contains(filterPattern)) {
                                 suggestions.add(chassis);
                             }
@@ -267,19 +254,13 @@ public class MainActivity extends AppCompatActivity {
                 @Override
                 protected void publishResults(CharSequence constraint, FilterResults results) {
                     filteredList = (List<String>) results.values;
-                    if (results.count > 0) {
-                        notifyDataSetChanged();
-                    } else {
-                        notifyDataSetInvalidated();
-                    }
+                    if (results.count > 0) notifyDataSetChanged();
+                    else notifyDataSetInvalidated();
                 }
             };
         }
     }
 
-    // =====================================================================
-    // গুগল শিট সিঙ্ক
-    // =====================================================================
     private void fetchSheetDataFromGoogle(boolean silent) {
         networkExecutor.execute(() -> {
             Set<String> newStock = downloadChassisListFromCsv(STOCK_SHEET_CSV_URL);
@@ -292,12 +273,10 @@ public class MainActivity extends AppCompatActivity {
                 }
                 stockSheetList = newStock;
                 purchaseSheetList = newPurchase;
-
                 allSheetChassisForSuggestion.clear();
                 allSheetChassisForSuggestion.addAll(stockSheetList);
                 allSheetChassisForSuggestion.addAll(purchaseSheetList);
                 refreshSuggestionAdapter();
-
                 tvStockCount.setText("Stock: " + stockSheetList.size() + " | Purchase: " + purchaseSheetList.size());
                 if (!silent) Toast.makeText(this, "Sheets Synced Successfully!", Toast.LENGTH_SHORT).show();
             });
@@ -313,7 +292,6 @@ public class MainActivity extends AppCompatActivity {
             connection.setConnectTimeout(15000);
             connection.setReadTimeout(15000);
             connection.setRequestMethod("GET");
-
             BufferedReader reader = new BufferedReader(new InputStreamReader(connection.getInputStream()));
             String line;
             boolean headerSkipped = false;
@@ -322,7 +300,6 @@ public class MainActivity extends AppCompatActivity {
             while ((line = reader.readLine()) != null) {
                 if (TextUtils.isEmpty(line.trim())) continue;
                 String[] cols = line.split(",", -1);
-
                 if (!headerSkipped) {
                     headerSkipped = true;
                     for (int i = 0; i < cols.length; i++) {
@@ -333,12 +310,9 @@ public class MainActivity extends AppCompatActivity {
                     }
                     continue;
                 }
-
                 if (cols.length > chassisColumnIndex) {
                     String chassis = cols[chassisColumnIndex].trim().toUpperCase(Locale.getDefault());
-                    if (!TextUtils.isEmpty(chassis)) {
-                        result.add(chassis);
-                    }
+                    if (!TextUtils.isEmpty(chassis)) result.add(chassis);
                 }
             }
             reader.close();
@@ -350,19 +324,13 @@ public class MainActivity extends AppCompatActivity {
         return result;
     }
 
-    // =====================================================================
-    // ক্যামেরা সেটআপ
-    // =====================================================================
     private void setupPinchToZoomAndFocus() {
         scaleGestureDetector = new ScaleGestureDetector(this, new ScaleGestureDetector.SimpleOnScaleGestureListener() {
             @Override
             public boolean onScale(ScaleGestureDetector detector) {
                 if (camera != null) {
-                    CameraInfo cameraInfo = camera.getCameraInfo();
-                    CameraControl cameraControl = camera.getCameraControl();
-                    float currentZoomRatio = cameraInfo.getZoomState().getValue().getZoomRatio();
-                    float delta = detector.getScaleFactor();
-                    cameraControl.setZoomRatio(currentZoomRatio * delta);
+                    float currentZoomRatio = camera.getCameraInfo().getZoomState().getValue().getZoomRatio();
+                    camera.getCameraControl().setZoomRatio(currentZoomRatio * detector.getScaleFactor());
                 }
                 return true;
             }
@@ -373,8 +341,7 @@ public class MainActivity extends AppCompatActivity {
             if (event.getAction() == MotionEvent.ACTION_UP && camera != null) {
                 MeteringPointFactory factory = previewView.getMeteringPointFactory();
                 MeteringPoint point = factory.createPoint(event.getX(), event.getY());
-                FocusMeteringAction action = new FocusMeteringAction.Builder(point).build();
-                camera.getCameraControl().startFocusAndMetering(action);
+                camera.getCameraControl().startFocusAndMetering(new FocusMeteringAction.Builder(point).build());
             }
             return true;
         });
@@ -407,15 +374,11 @@ public class MainActivity extends AppCompatActivity {
                 ProcessCameraProvider cameraProvider = cameraProviderFuture.get();
                 Preview preview = new Preview.Builder().build();
                 preview.setSurfaceProvider(previewView.getSurfaceProvider());
-
                 ImageAnalysis imageAnalysis = new ImageAnalysis.Builder()
-                        .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                        .build();
+                        .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST).build();
                 imageAnalysis.setAnalyzer(ContextCompat.getMainExecutor(this), this::processImageProxy);
-
-                CameraSelector cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA;
                 cameraProvider.unbindAll();
-                camera = cameraProvider.bindToLifecycle(this, cameraSelector, preview, imageAnalysis);
+                camera = cameraProvider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, preview, imageAnalysis);
             } catch (ExecutionException | InterruptedException e) {
                 e.printStackTrace();
             }
@@ -428,7 +391,6 @@ public class MainActivity extends AppCompatActivity {
             imageProxy.close();
             return;
         }
-
         Image mediaImage = imageProxy.getImage();
         if (mediaImage != null) {
             InputImage image = InputImage.fromMediaImage(mediaImage, imageProxy.getImageInfo().getRotationDegrees());
@@ -443,18 +405,13 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    // =====================================================================
-    // OCR
-    // =====================================================================
     private static final Pattern HYPHEN_CHASSIS_PATTERN = Pattern.compile("[A-Z0-9]{1,8}\\s*-\\s*[0-9]{3,9}");
     private static final Pattern VIN_PATTERN = Pattern.compile("[A-HJ-NPR-Z0-9]{17}");
     private static final Pattern FRAME_KEYWORD_PATTERN = Pattern.compile("FRAME|CHASSIS|VIN|VEHICLE\\s*ID");
 
     private void extractValidChassis(com.google.mlkit.vision.text.Text visionText) {
         String candidate = findCandidateNearKeyword(visionText);
-        if (candidate == null) {
-            candidate = findCandidateAnywhere(visionText.getText());
-        }
+        if (candidate == null) candidate = findCandidateAnywhere(visionText.getText());
         if (candidate == null) return;
 
         candidate = correctCommonOcrErrors(candidate);
@@ -462,6 +419,11 @@ public class MainActivity extends AppCompatActivity {
         String finalCandidate = (bestGuess != null) ? bestGuess : candidate;
 
         if (!scannedChassisSet.contains(finalCandidate)) {
+            String location = etLocation.getText().toString().trim();
+            if (TextUtils.isEmpty(location)) {
+                runOnUiThread(() -> Toast.makeText(MainActivity.this, "আগে Location লিখুন! স্ক্যান বন্ধ আছে।", Toast.LENGTH_SHORT).show());
+                return;
+            }
             isWaitingForNextScan = true;
             showEditDialogAndConfirm(finalCandidate);
         }
@@ -473,13 +435,10 @@ public class MainActivity extends AppCompatActivity {
             for (int i = 0; i < lines.size(); i++) {
                 String lineText = lines.get(i).getText().toUpperCase(Locale.getDefault());
                 if (!FRAME_KEYWORD_PATTERN.matcher(lineText).find()) continue;
-
                 String candidate = extractPatternFromText(lineText);
                 if (candidate != null) return candidate;
-
                 if (i + 1 < lines.size()) {
-                    String nextLine = lines.get(i + 1).getText().toUpperCase(Locale.getDefault());
-                    candidate = extractPatternFromText(nextLine);
+                    candidate = extractPatternFromText(lines.get(i + 1).getText().toUpperCase(Locale.getDefault()));
                     if (candidate != null) return candidate;
                 }
             }
@@ -494,13 +453,9 @@ public class MainActivity extends AppCompatActivity {
 
     private String extractPatternFromText(String text) {
         Matcher hyphenMatcher = HYPHEN_CHASSIS_PATTERN.matcher(text);
-        if (hyphenMatcher.find()) {
-            return hyphenMatcher.group().replaceAll("\\s+", "");
-        }
+        if (hyphenMatcher.find()) return hyphenMatcher.group().replaceAll("\\s+", "");
         Matcher vinMatcher = VIN_PATTERN.matcher(text);
-        if (vinMatcher.find()) {
-            return vinMatcher.group();
-        }
+        if (vinMatcher.find()) return vinMatcher.group();
         return null;
     }
 
@@ -527,9 +482,7 @@ public class MainActivity extends AppCompatActivity {
 
     private String findClosestKnownChassis(String scanned) {
         if (TextUtils.isEmpty(scanned)) return null;
-        if (stockSheetList.contains(scanned) || purchaseSheetList.contains(scanned)) {
-            return scanned;
-        }
+        if (stockSheetList.contains(scanned) || purchaseSheetList.contains(scanned)) return scanned;
 
         String best = null;
         int bestDistance = Integer.MAX_VALUE;
@@ -543,10 +496,7 @@ public class MainActivity extends AppCompatActivity {
                 best = candidate;
             }
         }
-
-        if (best != null && bestDistance <= MAX_ALLOWED_DISTANCE && bestDistance > 0) {
-            return best;
-        }
+        if (best != null && bestDistance <= MAX_ALLOWED_DISTANCE && bestDistance > 0) return best;
         return null;
     }
 
@@ -568,12 +518,10 @@ public class MainActivity extends AppCompatActivity {
     private void showEditDialogAndConfirm(String scannedChassis) {
         AlertDialog.Builder builder = new AlertDialog.Builder(this);
         builder.setTitle("Confirm or Edit Scanned Chassis");
-
         final EditText input = new EditText(this);
         input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS);
         input.setText(scannedChassis);
         builder.setView(input);
-
         builder.setPositiveButton("Save", (dialog, which) -> {
             String finalChassis = input.getText().toString().trim().toUpperCase(Locale.getDefault());
             if (!TextUtils.isEmpty(finalChassis)) {
@@ -581,19 +529,14 @@ public class MainActivity extends AppCompatActivity {
                 Toast.makeText(this, "Saved: " + finalChassis, Toast.LENGTH_SHORT).show();
             }
         });
-
         builder.setNegativeButton("Cancel", (dialog, which) -> isWaitingForNextScan = false);
         builder.setCancelable(false);
         builder.show();
     }
 
-    // =====================================================================
-    // সেভ ও লোড
-    // =====================================================================
     private void processAndSaveChassis(String chassis) {
         String location = etLocation.getText().toString().trim();
         if (TextUtils.isEmpty(location)) location = "218";
-
         String timeStamp = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(new Date());
 
         ScannedModel model;
@@ -607,7 +550,6 @@ public class MainActivity extends AppCompatActivity {
             model = new ScannedModel(chassis, location, timeStamp, "UNKNOWN");
             unknownList.add(model);
         }
-
         scannedChassisSet.add(chassis);
         int total = stockMatchList.size() + purchaseMatchList.size() + unknownList.size();
         tvLastScanned.setText("Last: " + chassis + " (Total: " + total + ")");
@@ -632,12 +574,10 @@ public class MainActivity extends AppCompatActivity {
         stockMatchList = loadListFromKey("stock_match_list");
         purchaseMatchList = loadListFromKey("purchase_match_list");
         unknownList = loadListFromKey("unknown_list");
-
         scannedChassisSet.clear();
         for (ScannedModel m : stockMatchList) scannedChassisSet.add(m.chassis);
         for (ScannedModel m : purchaseMatchList) scannedChassisSet.add(m.chassis);
         for (ScannedModel m : unknownList) scannedChassisSet.add(m.chassis);
-
         int total = stockMatchList.size() + purchaseMatchList.size() + unknownList.size();
         if (total > 0) {
             ScannedModel lastItem = !unknownList.isEmpty() ? unknownList.get(unknownList.size() - 1)
@@ -659,27 +599,20 @@ public class MainActivity extends AppCompatActivity {
         return list;
     }
 
-    // =====================================================================
-    // রিপোর্ট ডায়ালগ
-    // =====================================================================
     private void showScannedSummaryDialog() {
         int total = stockMatchList.size() + purchaseMatchList.size() + unknownList.size();
-
         AlertDialog.Builder builder = new AlertDialog.Builder(this);
         builder.setTitle("Scanned Summary (" + total + ")");
-
         String[] options = {
                 "Stock Matches (" + stockMatchList.size() + ")",
                 "Purchase Matches (" + purchaseMatchList.size() + ")",
                 "Unknown Items (" + unknownList.size() + ")"
         };
-
         builder.setItems(options, (dialog, which) -> {
             if (which == 0) showCategoryListDialog("Stock Matches", stockMatchList);
             else if (which == 1) showCategoryListDialog("Purchase Matches", purchaseMatchList);
             else showCategoryListDialog("Unknown Items", unknownList);
         });
-
         builder.setNegativeButton("Close", null);
         builder.setNeutralButton("Clear ALL Reports", (dialog, which) -> {
             new AlertDialog.Builder(this)
@@ -694,23 +627,18 @@ public class MainActivity extends AppCompatActivity {
                         tvLastScanned.setText("Last: None (Total: 0)");
                         Toast.makeText(this, "সব রিপোর্ট মুছে ফেলা হয়েছে!", Toast.LENGTH_SHORT).show();
                     })
-                    .setNegativeButton("না", null)
-                    .show();
+                    .setNegativeButton("না", null).show();
         });
         builder.show();
     }
 
     private void showCategoryListDialog(String title, List<ScannedModel> list) {
         List<String> display = new ArrayList<>();
-        for (ScannedModel m : list) {
-            display.add(m.chassis + "  |  " + m.location + "  |  " + m.timestamp);
-        }
+        for (ScannedModel m : list) display.add(m.chassis + "  |  " + m.location + "  |  " + m.timestamp);
         if (display.isEmpty()) display.add("(No items)");
-
         ArrayAdapter<String> adapter = new ArrayAdapter<>(this, android.R.layout.simple_list_item_1, display);
         ListView listView = new ListView(this);
         listView.setAdapter(adapter);
-
         AlertDialog.Builder builder = new AlertDialog.Builder(this);
         builder.setTitle(title + " (আইটেমে ট্যাপ করলে Edit/Delete অপশন আসবে)");
         builder.setView(listView);
@@ -719,12 +647,10 @@ public class MainActivity extends AppCompatActivity {
             list.clear();
             rebuildScannedSet();
             saveReportsToStorage();
-            tvLastScanned.setText("Last: None (Total: " +
-                    (stockMatchList.size() + purchaseMatchList.size() + unknownList.size()) + ")");
+            tvLastScanned.setText("Last: None (Total: " + (stockMatchList.size() + purchaseMatchList.size() + unknownList.size()) + ")");
             Toast.makeText(this, title + " cleared!", Toast.LENGTH_SHORT).show();
         });
         AlertDialog dialog = builder.create();
-
         listView.setOnItemClickListener((parent, view, position, id) -> {
             if (position < list.size()) {
                 dialog.dismiss();
@@ -737,48 +663,35 @@ public class MainActivity extends AppCompatActivity {
     private void showEditOrDeleteChoice(String title, List<ScannedModel> list, int position) {
         ScannedModel item = list.get(position);
         String[] actions = {"Edit", "Delete", "Cancel"};
-
-        new AlertDialog.Builder(this)
-                .setTitle(item.chassis)
+        new AlertDialog.Builder(this).setTitle(item.chassis)
                 .setItems(actions, (dialog, which) -> {
-                    if (which == 0) {
-                        showEditItemDialog(title, list, position);
-                    } else if (which == 1) {
+                    if (which == 0) showEditItemDialog(title, list, position);
+                    else if (which == 1) {
                         list.remove(position);
                         scannedChassisSet.remove(item.chassis);
                         saveReportsToStorage();
                         Toast.makeText(this, "Deleted: " + item.chassis, Toast.LENGTH_SHORT).show();
                         showCategoryListDialog(title, list);
-                    } else {
-                        showCategoryListDialog(title, list);
-                    }
-                })
-                .show();
+                    } else showCategoryListDialog(title, list);
+                }).show();
     }
 
     private void showEditItemDialog(String title, List<ScannedModel> list, int position) {
         ScannedModel item = list.get(position);
-
         android.widget.LinearLayout layout = new android.widget.LinearLayout(this);
         layout.setOrientation(android.widget.LinearLayout.VERTICAL);
         int pad = (int) (16 * getResources().getDisplayMetrics().density);
         layout.setPadding(pad, pad, pad, pad);
-
         final EditText chassisInput = new EditText(this);
         chassisInput.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS);
         chassisInput.setText(item.chassis);
         chassisInput.setHint("Chassis Number");
-
         final EditText locationInput = new EditText(this);
         locationInput.setText(item.location);
         locationInput.setHint("Location");
-
         layout.addView(chassisInput);
         layout.addView(locationInput);
-
-        new AlertDialog.Builder(this)
-                .setTitle("Edit Item")
-                .setView(layout)
+        new AlertDialog.Builder(this).setTitle("Edit Item").setView(layout)
                 .setPositiveButton("Save", (dialog, which) -> {
                     String newChassis = chassisInput.getText().toString().trim().toUpperCase(Locale.getDefault());
                     String newLocation = locationInput.getText().toString().trim();
@@ -786,10 +699,8 @@ public class MainActivity extends AppCompatActivity {
                         Toast.makeText(this, "Chassis খালি রাখা যাবে না", Toast.LENGTH_SHORT).show();
                         return;
                     }
-
                     list.remove(position);
                     scannedChassisSet.remove(item.chassis);
-
                     String newStatus;
                     if (stockSheetList.contains(newChassis)) {
                         newStatus = "STOCK_MATCH";
@@ -803,11 +714,10 @@ public class MainActivity extends AppCompatActivity {
                     }
                     scannedChassisSet.add(newChassis);
                     saveReportsToStorage();
-                    Toast.makeText(this, "Updated: " + newChassis + " (" + newStatus + ")", Toast.LENGTH_SHORT).show();
+                    Toast.makeText(this, "Updated: " + newChassis, Toast.LENGTH_SHORT).show();
                     showCategoryListDialog(title, list);
                 })
-                .setNegativeButton("Cancel", (dialog, which) -> showCategoryListDialog(title, list))
-                .show();
+                .setNegativeButton("Cancel", (dialog, which) -> showCategoryListDialog(title, list)).show();
     }
 
     private void rebuildScannedSet() {
@@ -817,47 +727,45 @@ public class MainActivity extends AppCompatActivity {
         for (ScannedModel m : unknownList) scannedChassisSet.add(m.chassis);
     }
 
-    // =====================================================================
-    // এক্সপোর্ট অপশন (নতুন Summary Report সহ)
-    // =====================================================================
     private void showExportOptionsDialog() {
         String[] options = {
                 "1. Location-wise Summary (PDF)",
                 "2. Location-wise Summary (Excel/CSV)",
-                "3. Stock Matches (CSV)",
-                "4. Purchase Matches (CSV)",
-                "5. Unknown Items (PDF)"
+                "3. Unmatched Chassis Remaining (PDF)",
+                "4. Unmatched Chassis Remaining (Excel)",
+                "5. Stock Matches (CSV)",
+                "6. Purchase Matches (CSV)",
+                "7. Unknown Items (PDF)"
         };
-
         AlertDialog.Builder builder = new AlertDialog.Builder(this);
         builder.setTitle("Export / Share Reports");
         builder.setItems(options, (dialog, which) -> {
             if (which == 0) shareLocationSummaryPdf();
             else if (which == 1) shareLocationSummaryCsv();
-            else if (which == 2) shareCsvReport(stockMatchList, "STOCK_MATCH");
-            else if (which == 3) shareCsvReport(purchaseMatchList, "PURCHASE_MATCH");
+            else if (which == 2) shareUnmatchedPdf();
+            else if (which == 3) shareUnmatchedCsv();
+            else if (which == 4) shareCsvReport(stockMatchList, "STOCK_MATCH");
+            else if (which == 5) shareCsvReport(purchaseMatchList, "PURCHASE_MATCH");
             else sharePdfReport(unknownList, "UNKNOWN");
         });
         builder.show();
     }
 
-    // Location অনুযায়ী গ্রুপ করে Summary বানানো
-    private Map<String, Integer> buildLocationSummary() {
-        Map<String, Integer> locationCount = new LinkedHashMap<>();
-
-        // শুধু Stock Matches নিয়ে Summary (আপনার ছবি অনুযায়ী)
-        for (ScannedModel m : stockMatchList) {
-            String loc = m.location == null || m.location.trim().isEmpty() ? "Unknown" : m.location.trim();
-            locationCount.put(loc, locationCount.getOrDefault(loc, 0) + 1);
+    private List<String> getUnmatchedChassisList() {
+        List<String> unmatched = new ArrayList<>();
+        for (String chassis : stockSheetList) {
+            if (!scannedChassisSet.contains(chassis)) {
+                unmatched.add(chassis);
+            }
         }
-        return locationCount;
+        Collections.sort(unmatched);
+        return unmatched;
     }
 
-    // ===== নতুন PDF Summary Report (ছবির মতো) =====
-    private void shareLocationSummaryPdf() {
-        Map<String, Integer> locationCount = buildLocationSummary();
-        if (locationCount.isEmpty()) {
-            Toast.makeText(this, "কোনো Stock Match ডাটা নেই!", Toast.LENGTH_SHORT).show();
+    private void shareUnmatchedPdf() {
+        List<String> unmatched = getUnmatchedChassisList();
+        if (unmatched.isEmpty()) {
+            Toast.makeText(this, "সব Chassis ম্যাচ হয়ে গেছে! কোনো Unmatched নেই।", Toast.LENGTH_LONG).show();
             return;
         }
 
@@ -867,41 +775,153 @@ public class MainActivity extends AppCompatActivity {
         Canvas canvas = page.getCanvas();
 
         Paint titlePaint = new Paint();
-        titlePaint.setTextSize(18);
+        titlePaint.setTextSize(16);
         titlePaint.setFakeBoldText(true);
-        titlePaint.setColor(Color.BLACK);
+        titlePaint.setColor(Color.parseColor("#6A1B9A"));
+        titlePaint.setTextAlign(Paint.Align.CENTER);
 
         Paint headerPaint = new Paint();
-        headerPaint.setTextSize(12);
+        headerPaint.setTextSize(10);
         headerPaint.setFakeBoldText(true);
-        headerPaint.setColor(Color.BLACK);
+        headerPaint.setTextAlign(Paint.Align.CENTER);
 
         Paint normalPaint = new Paint();
-        normalPaint.setTextSize(11);
-        normalPaint.setColor(Color.BLACK);
+        normalPaint.setTextSize(9);
+        normalPaint.setTextAlign(Paint.Align.CENTER);
 
         Paint borderPaint = new Paint();
         borderPaint.setStyle(Paint.Style.STROKE);
         borderPaint.setStrokeWidth(1);
         borderPaint.setColor(Color.BLACK);
 
-        Paint yellowPaint = new Paint();
-        yellowPaint.setColor(Color.YELLOW);
-        yellowPaint.setStyle(Paint.Style.FILL);
+        Paint headerBgPaint = new Paint();
+        headerBgPaint.setColor(Color.parseColor("#FFCC80"));
+        headerBgPaint.setStyle(Paint.Style.FILL);
+
+        canvas.drawText("STOCK UNMATCH REMAINING BALANCE REPORT", 297, 40, titlePaint);
+        titlePaint.setTextSize(12);
+        titlePaint.setFakeBoldText(false);
+        canvas.drawText("Total Remaining: " + unmatched.size(), 297, 58, titlePaint);
+
+        int startX = 25;
+        int startY = 80;
+        int rowHeight = 17;
+        int[] colWidths = {40, 170, 110, 110, 100};
+        String[] headers = {"S.NO", "CHASSIS NO", "PURCHASE DATE", "VENDOR", "REMARKS"};
+
+        canvas.drawRect(startX, startY, startX + 530, startY + rowHeight, headerBgPaint);
+
+        int currentX = startX;
+        for (int i = 0; i < headers.length; i++) {
+            canvas.drawRect(currentX, startY, currentX + colWidths[i], startY + rowHeight, borderPaint);
+            canvas.drawText(headers[i], currentX + colWidths[i] / 2f, startY + 12, headerPaint);
+            currentX += colWidths[i];
+        }
+        startY += rowHeight;
+
+        int sl = 1;
+        for (String chassis : unmatched) {
+            String[] row = {String.valueOf(sl++), chassis, "", "", ""};
+            currentX = startX;
+            for (int j = 0; j < row.length; j++) {
+                canvas.drawRect(currentX, startY, currentX + colWidths[j], startY + rowHeight, borderPaint);
+                canvas.drawText(row[j], currentX + colWidths[j] / 2f, startY + 12, normalPaint);
+                currentX += colWidths[j];
+            }
+            startY += rowHeight;
+
+            if (startY > 800) {
+                pdfDocument.finishPage(page);
+                pageInfo = new PdfDocument.PageInfo.Builder(595, 842, pdfDocument.getPages().size() + 1).create();
+                page = pdfDocument.startPage(pageInfo);
+                canvas = page.getCanvas();
+                startY = 40;
+            }
+        }
+
+        pdfDocument.finishPage(page);
+
+        try {
+            File cachePath = new File(getCacheDir(), "reports");
+            cachePath.mkdirs();
+            File file = new File(cachePath, "Stock_Unmatch_Remaining_Report.pdf");
+            pdfDocument.writeTo(new FileOutputStream(file));
+            pdfDocument.close();
+            openShareIntent(file, "application/pdf");
+        } catch (Exception e) {
+            e.printStackTrace();
+            Toast.makeText(this, "PDF বানাতে সমস্যা হয়েছে", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void shareUnmatchedCsv() {
+        List<String> unmatched = getUnmatchedChassisList();
+        if (unmatched.isEmpty()) {
+            Toast.makeText(this, "সব Chassis ম্যাচ হয়ে গেছে! কোনো Unmatched নেই।", Toast.LENGTH_LONG).show();
+            return;
+        }
+        try {
+            File cachePath = new File(getCacheDir(), "reports");
+            cachePath.mkdirs();
+            File file = new File(cachePath, "Unmatched_Chassis_Report.csv");
+            FileWriter writer = new FileWriter(file);
+            writer.append("STOCK UNMATCH REMAINING BALANCE REPORT\n");
+            writer.append("Total Remaining: ").append(String.valueOf(unmatched.size())).append("\n\n");
+            writer.append("S.NO,CHASSIS NO,PURCHASE DATE,VENDOR,REMARKS\n");
+            int sl = 1;
+            for (String chassis : unmatched) {
+                writer.append(String.valueOf(sl++)).append(",").append(chassis).append(",,,\n");
+            }
+            writer.flush();
+            writer.close();
+            openShareIntent(file, "text/csv");
+        } catch (Exception e) {
+            e.printStackTrace();
+            Toast.makeText(this, "CSV বানাতে সমস্যা হয়েছে", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private Map<String, Integer> buildLocationSummary() {
+        Map<String, Integer> locationCount = new LinkedHashMap<>();
+        for (ScannedModel m : stockMatchList) {
+            String loc = (m.location == null || m.location.trim().isEmpty()) ? "Unknown" : m.location.trim();
+            locationCount.put(loc, locationCount.getOrDefault(loc, 0) + 1);
+        }
+        return locationCount;
+    }
+
+    private void shareLocationSummaryPdf() {
+        Map<String, Integer> locationCount = buildLocationSummary();
+        if (locationCount.isEmpty()) {
+            Toast.makeText(this, "কোনো Stock Match ডাটা নেই!", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        PdfDocument pdfDocument = new PdfDocument();
+        PdfDocument.PageInfo pageInfo = new PdfDocument.PageInfo.Builder(595, 842, 1).create();
+        PdfDocument.Page page = pdfDocument.startPage(pageInfo);
+        Canvas canvas = page.getCanvas();
+
+        Paint titlePaint = new Paint();
+        titlePaint.setTextSize(18);
+        titlePaint.setFakeBoldText(true);
+        Paint headerPaint = new Paint();
+        headerPaint.setTextSize(12);
+        headerPaint.setFakeBoldText(true);
+        Paint normalPaint = new Paint();
+        normalPaint.setTextSize(11);
+        Paint borderPaint = new Paint();
+        borderPaint.setStyle(Paint.Style.STROKE);
+        borderPaint.setStrokeWidth(1);
+        borderPaint.setColor(Color.BLACK);
 
         String dateStr = new SimpleDateFormat("dd-MMM-yyyy", Locale.ENGLISH).format(new Date());
         canvas.drawText("STOCK LIST CHECKING REPORT , " + dateStr, 40, 50, titlePaint);
-
         int totalStock = 0;
         for (int qty : locationCount.values()) totalStock += qty;
         canvas.drawText("TOTAL STOCK (" + totalStock + ")", 40, 75, headerPaint);
 
-        int startX = 40;
-        int startY = 110;
-        int rowHeight = 28;
-        int[] colWidths = {60, 120, 200, 120}; // SL NO, QUANTITY, LOCATION, REMARKS
-
-        // Header
+        int startX = 40, startY = 110, rowHeight = 28;
+        int[] colWidths = {60, 120, 200, 120};
         String[] headers = {"SL NO", "CAR QUANTITY", "CAR LOCATION", "REMARKS"};
         int currentX = startX;
         for (int i = 0; i < headers.length; i++) {
@@ -913,12 +933,7 @@ public class MainActivity extends AppCompatActivity {
 
         int sl = 1;
         for (Map.Entry<String, Integer> entry : locationCount.entrySet()) {
-            String[] row = {
-                    String.valueOf(sl++),
-                    String.valueOf(entry.getValue()),
-                    entry.getKey(),
-                    ""
-            };
+            String[] row = {String.valueOf(sl++), String.valueOf(entry.getValue()), entry.getKey(), ""};
             currentX = startX;
             for (int j = 0; j < row.length; j++) {
                 canvas.drawRect(currentX, startY, currentX + colWidths[j], startY + rowHeight, borderPaint);
@@ -926,37 +941,9 @@ public class MainActivity extends AppCompatActivity {
                 currentX += colWidths[j];
             }
             startY += rowHeight;
-
-            if (startY > 750) {
-                pdfDocument.finishPage(page);
-                pageInfo = new PdfDocument.PageInfo.Builder(595, 842, pdfDocument.getPages().size() + 1).create();
-                page = pdfDocument.startPage(pageInfo);
-                canvas = page.getCanvas();
-                startY = 40;
-            }
         }
 
-        // Total row (yellow)
-        canvas.drawRect(startX, startY, startX + colWidths[0] + colWidths[1] + colWidths[2] + colWidths[3], startY + rowHeight, yellowPaint);
-        currentX = startX;
-        canvas.drawRect(currentX, startY, currentX + colWidths[0], startY + rowHeight, borderPaint);
-        canvas.drawText("", currentX + 5, startY + 19, headerPaint);
-        currentX += colWidths[0];
-        canvas.drawRect(currentX, startY, currentX + colWidths[1], startY + rowHeight, borderPaint);
-        canvas.drawText(String.valueOf(totalStock), currentX + 5, startY + 19, headerPaint);
-        currentX += colWidths[1];
-        canvas.drawRect(currentX, startY, currentX + colWidths[2], startY + rowHeight, borderPaint);
-        currentX += colWidths[2];
-        canvas.drawRect(currentX, startY, currentX + colWidths[3], startY + rowHeight, borderPaint);
-
-        startY += 50;
-        canvas.drawText("ADDED REPORT:", 40, startY, headerPaint);
-        startY += 40;
-        canvas.drawText("PREPARED BY", 40, startY, normalPaint);
-        canvas.drawRect(40, startY + 10, 200, startY + 40, borderPaint);
-
         pdfDocument.finishPage(page);
-
         try {
             File cachePath = new File(getCacheDir(), "reports");
             cachePath.mkdirs();
@@ -970,39 +957,27 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    // ===== নতুন Excel/CSV Summary Report =====
     private void shareLocationSummaryCsv() {
         Map<String, Integer> locationCount = buildLocationSummary();
         if (locationCount.isEmpty()) {
             Toast.makeText(this, "কোনো Stock Match ডাটা নেই!", Toast.LENGTH_SHORT).show();
             return;
         }
-
         try {
             File cachePath = new File(getCacheDir(), "reports");
             cachePath.mkdirs();
             File file = new File(cachePath, "Stock_List_Checking_Report.csv");
-
             FileWriter writer = new FileWriter(file);
             String dateStr = new SimpleDateFormat("dd-MMM-yyyy", Locale.ENGLISH).format(new Date());
             writer.append("STOCK LIST CHECKING REPORT , ").append(dateStr).append("\n");
-
             int totalStock = 0;
             for (int qty : locationCount.values()) totalStock += qty;
             writer.append("TOTAL STOCK (").append(String.valueOf(totalStock)).append(")\n");
             writer.append("SL NO,CAR QUANTITY,CAR LOCATION,REMARKS\n");
-
             int sl = 1;
             for (Map.Entry<String, Integer> entry : locationCount.entrySet()) {
-                writer.append(String.valueOf(sl++)).append(",")
-                        .append(String.valueOf(entry.getValue())).append(",")
-                        .append(entry.getKey()).append(",")
-                        .append("\n");
+                writer.append(String.valueOf(sl++)).append(",").append(String.valueOf(entry.getValue())).append(",").append(entry.getKey()).append(",\n");
             }
-            writer.append(",").append(String.valueOf(totalStock)).append(",,\n");
-            writer.append("\nADDED REPORT:\n");
-            writer.append("PREPARED BY\n");
-
             writer.flush();
             writer.close();
             openShareIntent(file, "text/csv");
@@ -1012,12 +987,10 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    // পুরনো ডিটেইল রিপোর্টগুলো
     private void sharePdfReport(List<ScannedModel> filtered, String filterStatus) {
         PdfDocument pdfDocument = new PdfDocument();
         PdfDocument.PageInfo pageInfo = new PdfDocument.PageInfo.Builder(595, 842, 1).create();
         PdfDocument.Page page = pdfDocument.startPage(pageInfo);
-
         Canvas canvas = page.getCanvas();
         Paint paint = new Paint();
         Paint borderPaint = new Paint();
@@ -1028,19 +1001,13 @@ public class MainActivity extends AppCompatActivity {
         paint.setTextSize(16);
         paint.setFakeBoldText(true);
         canvas.drawText("Scanned Items Report (" + filterStatus + ")", 40, 50, paint);
-
         paint.setTextSize(12);
         paint.setFakeBoldText(false);
-        String currentDate = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(new Date());
-        canvas.drawText("Generated Date: " + currentDate, 40, 75, paint);
-        canvas.drawText("Total Count: " + filtered.size(), 40, 95, paint);
+        canvas.drawText("Total Count: " + filtered.size(), 40, 75, paint);
 
-        int startX = 40;
-        int startY = 130;
-        int rowHeight = 30;
-        int[] colWidths = {40, 110, 110, 80, 150};
+        int startX = 40, startY = 110, rowHeight = 30;
+        int[] colWidths = {40, 130, 100, 80, 150};
         String[] headers = {"SR", "CHASIS", "STATUS", "LOCATION", "TIME STAMP"};
-
         paint.setFakeBoldText(true);
         int currentX = startX;
         for (int i = 0; i < headers.length; i++) {
@@ -1048,15 +1015,12 @@ public class MainActivity extends AppCompatActivity {
             canvas.drawText(headers[i], currentX + 5, startY + 20, paint);
             currentX += colWidths[i];
         }
-
         paint.setFakeBoldText(false);
         startY += rowHeight;
 
         for (int i = 0; i < filtered.size(); i++) {
             ScannedModel item = filtered.get(i);
-            String[] rowData = {
-                    String.valueOf(i + 1), item.chassis, item.status, item.location, item.timestamp
-            };
+            String[] rowData = {String.valueOf(i + 1), item.chassis, item.status, item.location, item.timestamp};
             currentX = startX;
             for (int j = 0; j < rowData.length; j++) {
                 canvas.drawRect(currentX, startY, currentX + colWidths[j], startY + rowHeight, borderPaint);
@@ -1064,18 +1028,15 @@ public class MainActivity extends AppCompatActivity {
                 currentX += colWidths[j];
             }
             startY += rowHeight;
-
             if (startY > 780 && i != filtered.size() - 1) {
                 pdfDocument.finishPage(page);
-                PdfDocument.PageInfo newPageInfo = new PdfDocument.PageInfo.Builder(595, 842, pdfDocument.getPages().size() + 1).create();
-                page = pdfDocument.startPage(newPageInfo);
+                pageInfo = new PdfDocument.PageInfo.Builder(595, 842, pdfDocument.getPages().size() + 1).create();
+                page = pdfDocument.startPage(pageInfo);
                 canvas = page.getCanvas();
                 startY = 40;
             }
         }
-
         pdfDocument.finishPage(page);
-
         try {
             File cachePath = new File(getCacheDir(), "reports");
             cachePath.mkdirs();
@@ -1094,16 +1055,12 @@ public class MainActivity extends AppCompatActivity {
             File cachePath = new File(getCacheDir(), "reports");
             cachePath.mkdirs();
             File file = new File(cachePath, filterStatus + "_Report.csv");
-
             FileWriter writer = new FileWriter(file);
             writer.append("SR,CHASIS,STATUS,LOCATION,TIME STAMP\n");
             int count = 1;
             for (ScannedModel item : filtered) {
-                writer.append(String.valueOf(count++)).append(",")
-                        .append(item.chassis).append(",")
-                        .append(item.status).append(",")
-                        .append(item.location).append(",")
-                        .append(item.timestamp).append("\n");
+                writer.append(String.valueOf(count++)).append(",").append(item.chassis).append(",")
+                        .append(item.status).append(",").append(item.location).append(",").append(item.timestamp).append("\n");
             }
             writer.flush();
             writer.close();
