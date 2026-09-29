@@ -1,0 +1,114 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:padding="12dp">
+
+    <!-- Top Action Buttons -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:weightSum="3">
+
+        <Button
+            android:id="@+id/btnSyncSheets"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Sync Sheets" />
+
+        <Button
+            android:id="@+id/btnViewReport"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="View Report" />
+
+        <Button
+            android:id="@+id/btnExportFiles"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Export Files" />
+    </LinearLayout>
+
+    <!-- Location Entry -->
+    <EditText
+        android:id="@+id/etLocation"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:hint="Location (e.g., 218)"
+        android:inputType="number" />
+
+    <!-- Manual Chassis Entry with AutoComplete Suggestions -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal">
+
+        <AutoCompleteTextView
+            android:id="@+id/etManualChassis"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:completionThreshold="1"
+            android:hint="Manual Chassis Entry"
+            android:inputType="textCapCharacters" />
+
+        <Button
+            android:id="@+id/btnAddManual"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Add" />
+    </LinearLayout>
+
+    <!-- Sheet Counts Display -->
+    <TextView
+        android:id="@+id/tvStockCount"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center"
+        android:padding="6dp"
+        android:text="Stock: 0 | Purchase: 0"
+        android:textStyle="bold" />
+
+    <!-- Scanner Status Toggle -->
+    <Button
+        android:id="@+id/btnScannerStatus"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:backgroundTint="#2E7D32"
+        android:text="Scanner Status: ON"
+        android:textColor="@android:color/white" />
+
+    <!-- Camera Preview View -->
+    <androidx.camera.view.PreviewView
+        android:id="@+id/previewView"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:layout_marginVertical="6dp" />
+
+    <!-- Last Scanned Info -->
+    <TextView
+        android:id="@+id/tvLastScanned"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center"
+        android:padding="6dp"
+        android:text="Last: None (Total: 0)"
+        android:textSize="14sp"
+        android:textStyle="bold" />
+
+    <!-- Next Scan Button -->
+    <Button
+        android:id="@+id/btnNextScan"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:backgroundTint="#1B5E20"
+        android:text="Next Scan"
+        android:textColor="@android:color/white" />
+
+</LinearLayout>
