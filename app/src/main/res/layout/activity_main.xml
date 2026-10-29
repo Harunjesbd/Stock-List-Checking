@@ -34,13 +34,14 @@
             android:text="Export Files" />
     </LinearLayout>
 
-    <!-- Location Entry -->
-    <EditText
+    <!-- Location Entry (এখন AutoCompleteTextView — আগের টাইপ করা লোকেশন সাজেস্ট করবে) -->
+    <AutoCompleteTextView
         android:id="@+id/etLocation"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:hint="Location (e.g., 218)"
-        android:inputType="number" />
+        android:hint="Location (e.g., Nasa, 218)"
+        android:completionThreshold="1"
+        android:inputType="text" />
 
     <!-- Manual Chassis Entry with AutoComplete Suggestions -->
     <LinearLayout
