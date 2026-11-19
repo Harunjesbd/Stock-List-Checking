@@ -369,17 +369,41 @@ public class MainActivity extends AppCompatActivity {
 
     // ================== Google Sheet থেকে CSV ডাউনলোড ==================
 
+    // ব্যবহারকারীর নিজের Sync Settings-এ দেওয়া লিংক ছাড়া আর কোনো hardcoded/ডিফল্ট লিংক
+    // ব্যবহার করা হয় না। (defaultUrl প্যারামিটারটা এখন আর ব্যবহার হয় না — ইচ্ছাকৃতভাবে
+    // রাখা হয়েছে যাতে অন্য কেউ এই অ্যাপ ব্যবহার করলে ভুলে Developer-এর নিজের Google
+    // Sheet সিঙ্ক হয়ে না যায়। প্রতিটা ব্যবহারকারীকে — মূল Developer নিজেও — একবার
+    // Sync Settings থেকে নিজের শিট লিংক বসিয়ে Save করতে হবে।)
     private String getEffectiveUrl(String prefKey, String defaultUrl) {
-        String custom = sharedPreferences.getString(prefKey, "");
-        return TextUtils.isEmpty(custom) ? defaultUrl : custom;
+        return sharedPreferences.getString(prefKey, "");
     }
 
     private void fetchSheetDataFromGoogle(boolean silent) {
+        String stockUrl = getEffectiveUrl(PREF_URL_STOCK, STOCK_SHEET_CSV_URL);
+
+        // Stock Sheet লিংক একদমই সেট করা না থাকলে — অন্য কেউ এই অ্যাপ প্রথমবার ব্যবহার করলে
+        // এটাই হবে — চুপচাপ কোনো hardcoded শিট সিঙ্ক না করে স্পষ্টভাবে জানিয়ে দেওয়া হয়
+        // যে আগে নিজের শিট লিংক বসাতে হবে।
+        if (TextUtils.isEmpty(stockUrl)) {
+            tvStockCount.setText("Stock Sheet লিংক সেট করা হয়নি — Sync Sheets এ Long Press করুন");
+            if (!silent) {
+                new AlertDialog.Builder(this)
+                        .setTitle("Google Sheet লিংক সেট করা নেই")
+                        .setMessage("এই অ্যাপ ব্যবহার করতে প্রথমে আপনার নিজের Stock Sheet-এর Google "
+                                + "Sheet CSV লিংক লাগবে।\n\nSync Sheets বাটনে লম্বা চাপ (Long Press) "
+                                + "দিয়ে Sync Settings খুলুন, সেখানে 'Stock Sheet' ঘরে আপনার শিটের CSV "
+                                + "লিংক বসান, তারপর Save & Sync চাপুন।")
+                        .setPositiveButton("Sync Settings খুলুন", (d, w) -> showSyncSettingsDialog())
+                        .setNegativeButton("OK", null)
+                        .show();
+            }
+            return;
+        }
+
         final boolean syncPurchase = sharedPreferences.getBoolean(PREF_SYNC_PURCHASE_ON, true);
         final boolean syncSold = sharedPreferences.getBoolean(PREF_SYNC_SOLD_ON, true);
 
         networkExecutor.execute(() -> {
-            String stockUrl = getEffectiveUrl(PREF_URL_STOCK, STOCK_SHEET_CSV_URL);
             Map<String, SheetDetails> newStock = downloadChassisMapFromCsv(stockUrl);
 
             Map<String, SheetDetails> newPurchase = new LinkedHashMap<>();
@@ -533,9 +557,26 @@ public class MainActivity extends AppCompatActivity {
         scrollView.addView(layout);
 
         TextView note = new TextView(this);
-        note.setText("এখানে ফাঁকা রাখলে ডিফল্ট লিংক ব্যবহার হবে। অন্য ব্যবসার জন্য সেটআপ করলে এখানে নিজের Google Sheet-এর 'Publish to web' CSV লিংক বসান।");
+        note.setText("⚠️ এখানে কোনো ডিফল্ট/hardcoded লিংক নেই — প্রতিটা ব্যবহারকারীকে (আপনি নিজেও) নিজের Google Sheet-এর 'Publish to web' CSV লিংক এখানে বসাতে হবে। Stock Sheet লিংক ফাঁকা থাকলে অ্যাপ সিঙ্ক করবে না — নিজের শিট ছাড়া অন্য কারো শিট ভুলে সিঙ্ক হবে না।");
         note.setPadding(0, 0, 0, pad);
         layout.addView(note);
+
+        // ==== হেডার রো-তে কোন শব্দগুলো থাকতে হবে — স্পষ্টভাবে দেখানোর জন্য হাইলাইট করা বক্স ====
+        TextView headerGuideBox = new TextView(this);
+        headerGuideBox.setText("নিজের Google Sheet-এ এই ফিচার ব্যবহার করতে হলে, শিটের একদম প্রথম (হেডার) সারিতে অবশ্যই নিচের শব্দগুলো থাকা লাগবে (বানান/বড়-ছোট হাতের অক্ষর যেকোনো হলেই চলবে, কলামের পজিশন/অর্ডার যেকোনো জায়গায় হতে পারে):\n\n"
+                + "✔ CHASSIS  →  যেমন: \"CHASSIS NO\" (চেসিস নাম্বারের কলাম)\n"
+                + "✔ PURCHASE DATE  অথবা শুধু  DATE  →  (তারিখের কলাম)\n"
+                + "✔ VENDOR  →  (ভেন্ডর/বিক্রেতার নামের কলাম)\n\n"
+                + "এই নিয়ম Stock, Purchase, এবং Sold — সব কয়টা শিটের জন্যই প্রযোজ্য। এই ৩টা শব্দ-ওয়ালা কলাম না পেলে অ্যাপ ডেটা ঠিকভাবে পড়তে পারবে না।");
+        headerGuideBox.setTextSize(12);
+        headerGuideBox.setPadding(pad, pad, pad, pad);
+        headerGuideBox.setBackgroundColor(0xFFFFF3CD);
+        headerGuideBox.setTextColor(Color.BLACK);
+        LinearLayout.LayoutParams headerGuideParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        headerGuideParams.setMargins(0, 0, 0, pad);
+        headerGuideBox.setLayoutParams(headerGuideParams);
+        layout.addView(headerGuideBox);
 
         CheckBox cbSyncPurchase = new CheckBox(this);
         cbSyncPurchase.setText("Purchase শিট সিঙ্ক করুন");
@@ -551,11 +592,11 @@ public class MainActivity extends AppCompatActivity {
         hint2.setText("\nশুধু Stock মিলানোর প্রয়োজন হলে উপরের দুইটা অফ (uncheck) করে দিন — ফোন স্লো/হ্যাং হবে না।\n");
         layout.addView(hint2);
 
-        EditText urlStock = makeUrlInput("Stock Sheet CSV লিংক (খালি = ডিফল্ট)", PREF_URL_STOCK);
-        EditText urlPurchase = makeUrlInput("Purchase Sheet CSV লিংক (খালি = ডিফল্ট)", PREF_URL_PURCHASE);
-        EditText urlSoldCurrent = makeUrlInput("Current Month Sales CSV লিংক (খালি = ডিফল্ট)", PREF_URL_SOLD_CURRENT);
-        EditText urlSoldAdvanced = makeUrlInput("Advanced Sales CSV লিংক (খালি = ডিফল্ট)", PREF_URL_SOLD_ADVANCED);
-        EditText urlSoldMain = makeUrlInput("Main Sales CSV লিংক (খালি = ডিফল্ট)", PREF_URL_SOLD_MAIN);
+        EditText urlStock = makeUrlInput("Stock Sheet CSV লিংক (আবশ্যক — এটা ছাড়া সিঙ্ক হবে না)", PREF_URL_STOCK);
+        EditText urlPurchase = makeUrlInput("Purchase Sheet CSV লিংক (উপরে টিক দিলে আবশ্যক)", PREF_URL_PURCHASE);
+        EditText urlSoldCurrent = makeUrlInput("Current Month Sales CSV লিংক (উপরে টিক দিলে আবশ্যক)", PREF_URL_SOLD_CURRENT);
+        EditText urlSoldAdvanced = makeUrlInput("Advanced Sales CSV লিংক (উপরে টিক দিলে আবশ্যক)", PREF_URL_SOLD_ADVANCED);
+        EditText urlSoldMain = makeUrlInput("Main Sales CSV লিংক (উপরে টিক দিলে আবশ্যক)", PREF_URL_SOLD_MAIN);
 
         layout.addView(labelFor("Stock Sheet:"));
         layout.addView(urlStock);
