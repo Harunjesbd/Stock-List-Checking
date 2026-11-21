@@ -61,6 +61,10 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.FileWriter;
 import java.io.InputStreamReader;
+import java.io.FileInputStream;
+import java.io.OutputStreamWriter;
+import java.io.BufferedWriter;
+import java.nio.charset.StandardCharsets;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.text.SimpleDateFormat;
@@ -105,6 +109,16 @@ public class MainActivity extends AppCompatActivity {
     private static final String PREF_URL_SOLD_ADVANCED = "custom_url_sold_advanced";
     private static final String PREF_URL_SOLD_MAIN = "custom_url_sold_main";
     private static final String PREF_KNOWN_LOCATIONS = "known_locations";
+
+    // ================== অফলাইন ক্যাশ (Offline Cache) ==================
+    // সিঙ্ক সফল হলে প্রতিটা শিটের ডেটা ফোনের ভেতরে ফাইলে সেভ হয়। পরে ইন্টারনেট না
+    // থাকলেও অ্যাপ খুললে এই ফাইল থেকে ডেটা লোড হয়ে স্ক্যান/মিলানো সব কাজ করবে।
+    private static final String CACHE_STOCK = "stock";
+    private static final String CACHE_PURCHASE = "purchase";
+    private static final String CACHE_SOLD_CURRENT = "sold_current";
+    private static final String CACHE_SOLD_ADVANCED = "sold_advanced";
+    private static final String CACHE_SOLD_MAIN = "sold_main";
+    private static final String PREF_LAST_SYNC_TIME = "last_sync_time";
 
     private static final int COLOR_SKY_BLUE = 0xFF87CEEB;
 
@@ -201,7 +215,8 @@ public class MainActivity extends AppCompatActivity {
         setupManualEntryAutoSuggest();
         setupLocationAutoSuggest();
         loadReportsFromStorage();
-        fetchSheetDataFromGoogle(true);
+        loadCachedSheetData();          // আগে ফোনে সেভ করা ডেটা লোড (ইন্টারনেট লাগে না)
+        fetchSheetDataFromGoogle(true); // তারপর ইন্টারনেট থাকলে নতুন ডেটা আনার চেষ্টা
         checkPermissions();
 
         btnAddManual.setOnClickListener(v -> {
@@ -402,62 +417,202 @@ public class MainActivity extends AppCompatActivity {
 
         final boolean syncPurchase = sharedPreferences.getBoolean(PREF_SYNC_PURCHASE_ON, true);
         final boolean syncSold = sharedPreferences.getBoolean(PREF_SYNC_SOLD_ON, true);
+        final String purchaseUrl = getEffectiveUrl(PREF_URL_PURCHASE, PURCHASE_SHEET_CSV_URL);
+        final String soldCurrentUrl = getEffectiveUrl(PREF_URL_SOLD_CURRENT, CURRENT_MONTH_SALES_CSV_URL);
+        final String soldAdvancedUrl = getEffectiveUrl(PREF_URL_SOLD_ADVANCED, ADVANCED_SALES_CSV_URL);
+        final String soldMainUrl = getEffectiveUrl(PREF_URL_SOLD_MAIN, MAIN_SALES_CSV_URL);
+
+        if (!silent) tvStockCount.setText("সিঙ্ক হচ্ছে... অপেক্ষা করুন");
 
         networkExecutor.execute(() -> {
-            Map<String, SheetDetails> newStock = downloadChassisMapFromCsv(stockUrl);
+            // downloadChassisMapFromCsv() এখন ব্যর্থ হলে null দেয় (ইন্টারনেট নেই / লিংক ভুল)।
+            // null হলে সেই শিটের পুরোনো (ক্যাশ করা) ডেটা যেমন আছে তেমনই থাকবে — মুছে যাবে না।
+            Map<String, SheetDetails> dlStock = downloadChassisMapFromCsv(stockUrl);
+            Map<String, SheetDetails> dlPurchase = syncPurchase ? downloadChassisMapFromCsv(purchaseUrl) : null;
+            Map<String, SheetDetails> dlCurrent = syncSold ? downloadChassisMapFromCsv(soldCurrentUrl) : null;
+            Map<String, SheetDetails> dlAdvanced = syncSold ? downloadChassisMapFromCsv(soldAdvancedUrl) : null;
+            Map<String, SheetDetails> dlMain = syncSold ? downloadChassisMapFromCsv(soldMainUrl) : null;
 
-            Map<String, SheetDetails> newPurchase = new LinkedHashMap<>();
-            if (syncPurchase) {
-                String purchaseUrl = getEffectiveUrl(PREF_URL_PURCHASE, PURCHASE_SHEET_CSV_URL);
-                newPurchase = downloadChassisMapFromCsv(purchaseUrl);
+            // যেগুলো সফলভাবে ডাউনলোড হলো, সেগুলো ফোনে সেভ (পরে অফলাইনে ব্যবহারের জন্য)
+            if (dlStock != null) saveSheetCache(CACHE_STOCK, stockUrl, dlStock);
+            if (dlPurchase != null) saveSheetCache(CACHE_PURCHASE, purchaseUrl, dlPurchase);
+            if (dlCurrent != null) saveSheetCache(CACHE_SOLD_CURRENT, soldCurrentUrl, dlCurrent);
+            if (dlAdvanced != null) saveSheetCache(CACHE_SOLD_ADVANCED, soldAdvancedUrl, dlAdvanced);
+            if (dlMain != null) saveSheetCache(CACHE_SOLD_MAIN, soldMainUrl, dlMain);
+
+            boolean anySuccess = dlStock != null || dlPurchase != null || dlCurrent != null
+                    || dlAdvanced != null || dlMain != null;
+            boolean allSuccess = dlStock != null
+                    && (!syncPurchase || dlPurchase != null)
+                    && (!syncSold || (dlCurrent != null && dlAdvanced != null && dlMain != null));
+            if (anySuccess) {
+                sharedPreferences.edit().putLong(PREF_LAST_SYNC_TIME, System.currentTimeMillis()).apply();
             }
-
-            Map<String, SheetDetails> newCurrentSold = new LinkedHashMap<>();
-            Map<String, SheetDetails> newAdvancedSold = new LinkedHashMap<>();
-            Map<String, SheetDetails> newMainSold = new LinkedHashMap<>();
-            if (syncSold) {
-                newCurrentSold = downloadChassisMapFromCsv(getEffectiveUrl(PREF_URL_SOLD_CURRENT, CURRENT_MONTH_SALES_CSV_URL));
-                newAdvancedSold = downloadChassisMapFromCsv(getEffectiveUrl(PREF_URL_SOLD_ADVANCED, ADVANCED_SALES_CSV_URL));
-                newMainSold = downloadChassisMapFromCsv(getEffectiveUrl(PREF_URL_SOLD_MAIN, MAIN_SALES_CSV_URL));
-            }
-
-            final Map<String, SheetDetails> finalPurchase = newPurchase;
-            final Map<String, SheetDetails> finalCurrentSold = newCurrentSold;
-            final Map<String, SheetDetails> finalAdvancedSold = newAdvancedSold;
-            final Map<String, SheetDetails> finalMainSold = newMainSold;
 
             mainHandler.post(() -> {
-                if (newStock.isEmpty() && finalPurchase.isEmpty() && finalCurrentSold.isEmpty()
-                        && finalAdvancedSold.isEmpty() && finalMainSold.isEmpty()) {
-                    Toast.makeText(this, "শিট সিঙ্ক ব্যর্থ। ইন্টারনেট চেক করুন।", Toast.LENGTH_LONG).show();
-                    return;
+                if (dlStock != null) stockSheetMap = dlStock;
+                if (dlPurchase != null) purchaseSheetMap = dlPurchase;
+                if (dlCurrent != null) currentMonthSalesMap = dlCurrent;
+                if (dlAdvanced != null) advancedSalesMap = dlAdvanced;
+                if (dlMain != null) mainSalesMap = dlMain;
+
+                // Sync Settings-এ বন্ধ (OFF) করা শিটগুলো মিলানোর সময় ব্যবহার হবে না
+                if (!syncPurchase) purchaseSheetMap = new LinkedHashMap<>();
+                if (!syncSold) {
+                    currentMonthSalesMap = new LinkedHashMap<>();
+                    advancedSalesMap = new LinkedHashMap<>();
+                    mainSalesMap = new LinkedHashMap<>();
                 }
-                stockSheetMap = newStock;
-                purchaseSheetMap = finalPurchase;
-                currentMonthSalesMap = finalCurrentSold;
-                advancedSalesMap = finalAdvancedSold;
-                mainSalesMap = finalMainSold;
 
-                allSheetChassisForSuggestion.clear();
-                allSheetChassisForSuggestion.addAll(stockSheetMap.keySet());
-                allSheetChassisForSuggestion.addAll(purchaseSheetMap.keySet());
-                allSheetChassisForSuggestion.addAll(currentMonthSalesMap.keySet());
-                allSheetChassisForSuggestion.addAll(advancedSalesMap.keySet());
-                allSheetChassisForSuggestion.addAll(mainSalesMap.keySet());
-                refreshSuggestionAdapter();
+                applySheetDataToUi(!anySuccess);
 
-                int soldTotal = currentMonthSalesMap.size() + advancedSalesMap.size() + mainSalesMap.size();
-                tvStockCount.setText("Stock: " + stockSheetMap.size()
-                        + " | Purchase: " + (syncPurchase ? String.valueOf(purchaseSheetMap.size()) : "OFF")
-                        + " | Sold: " + (syncSold ? String.valueOf(soldTotal) : "OFF"));
-                if (!silent) Toast.makeText(this, "Sheets Synced Successfully!", Toast.LENGTH_SHORT).show();
+                if (!anySuccess) {
+                    if (!silent) {
+                        boolean hasCache = !stockSheetMap.isEmpty();
+                        Toast.makeText(this, hasCache
+                                        ? "ইন্টারনেট নেই — আগের সেভ করা ডেটা দিয়েই কাজ চলবে (অফলাইন)"
+                                        : "শিট সিঙ্ক ব্যর্থ। ইন্টারনেট চেক করুন।",
+                                Toast.LENGTH_LONG).show();
+                    }
+                } else if (!allSuccess) {
+                    if (!silent) Toast.makeText(this,
+                            "কিছু শিট সিঙ্ক হয়নি — সেগুলোর আগের সেভ করা ডেটা ব্যবহার হচ্ছে",
+                            Toast.LENGTH_LONG).show();
+                } else {
+                    if (!silent) Toast.makeText(this, "Sheets Synced Successfully! (অফলাইনের জন্য সেভ হয়েছে)", Toast.LENGTH_SHORT).show();
+                }
             });
         });
     }
 
+    /** শিটের ডেটা দিয়ে Suggestion লিস্ট আর উপরের Stock/Purchase/Sold কাউন্ট আপডেট করে। */
+    private void applySheetDataToUi(boolean offline) {
+        final boolean syncPurchase = sharedPreferences.getBoolean(PREF_SYNC_PURCHASE_ON, true);
+        final boolean syncSold = sharedPreferences.getBoolean(PREF_SYNC_SOLD_ON, true);
+
+        allSheetChassisForSuggestion.clear();
+        allSheetChassisForSuggestion.addAll(stockSheetMap.keySet());
+        allSheetChassisForSuggestion.addAll(purchaseSheetMap.keySet());
+        allSheetChassisForSuggestion.addAll(currentMonthSalesMap.keySet());
+        allSheetChassisForSuggestion.addAll(advancedSalesMap.keySet());
+        allSheetChassisForSuggestion.addAll(mainSalesMap.keySet());
+        refreshSuggestionAdapter();
+
+        int soldTotal = currentMonthSalesMap.size() + advancedSalesMap.size() + mainSalesMap.size();
+        String text = "Stock: " + stockSheetMap.size()
+                + " | Purchase: " + (syncPurchase ? String.valueOf(purchaseSheetMap.size()) : "OFF")
+                + " | Sold: " + (syncSold ? String.valueOf(soldTotal) : "OFF");
+
+        long last = sharedPreferences.getLong(PREF_LAST_SYNC_TIME, 0);
+        if (last > 0) {
+            String when = new SimpleDateFormat("dd-MM-yyyy hh:mm a", Locale.ENGLISH).format(new Date(last));
+            text += "\n" + (offline ? "📴 অফলাইন — " : "✅ ") + "শেষ সিঙ্ক: " + when;
+        } else if (offline) {
+            text += "\n📴 অফলাইন — এখনো একবারও সিঙ্ক হয়নি";
+        }
+        tvStockCount.setText(text);
+    }
+
+    // ================== অফলাইন ক্যাশ — সেভ ও লোড ==================
+
+    private File cacheFile(String name) {
+        return new File(getFilesDir(), "sheet_cache_" + name + ".tsv");
+    }
+
+    /**
+     * একটা শিটের ডেটা ফোনের ভেতরের ফাইলে সেভ করে।
+     * প্রথম লাইনে কোন লিংক থেকে ডেটা এসেছে সেটা লেখা থাকে — Sync Settings-এ লিংক বদলালে
+     * পুরোনো লিংকের ক্যাশ আর লোড হবে না (অন্য ব্যবসার ডেটা মিশে যাবে না)।
+     * আগে .tmp ফাইলে লিখে তারপর নাম বদলানো হয়, যাতে লেখার মাঝে অ্যাপ বন্ধ হলেও পুরোনো ক্যাশ নষ্ট না হয়।
+     */
+    private void saveSheetCache(String name, String sourceUrl, Map<String, SheetDetails> map) {
+        File target = cacheFile(name);
+        File tmp = new File(target.getAbsolutePath() + ".tmp");
+        try (BufferedWriter w = new BufferedWriter(new OutputStreamWriter(
+                new FileOutputStream(tmp), StandardCharsets.UTF_8))) {
+            w.write("#URL\t" + cleanForCache(sourceUrl));
+            w.newLine();
+            for (Map.Entry<String, SheetDetails> e : map.entrySet()) {
+                SheetDetails d = e.getValue();
+                w.write(cleanForCache(e.getKey()) + "\t" + cleanForCache(d.purchaseDate) + "\t" + cleanForCache(d.vendor));
+                w.newLine();
+            }
+        } catch (Exception ex) {
+            ex.printStackTrace();
+            tmp.delete();
+            return;
+        }
+        if (target.exists()) target.delete();
+        if (!tmp.renameTo(target)) tmp.delete();
+    }
+
+    /** ফোনে সেভ করা একটা শিটের ডেটা পড়ে। লিংক না মিললে বা ফাইল না থাকলে খালি ম্যাপ দেয়। */
+    private Map<String, SheetDetails> loadSheetCache(String name, String expectedUrl) {
+        Map<String, SheetDetails> map = new LinkedHashMap<>();
+        File f = cacheFile(name);
+        if (TextUtils.isEmpty(expectedUrl) || !f.exists()) return map;
+        try (BufferedReader r = new BufferedReader(new InputStreamReader(
+                new FileInputStream(f), StandardCharsets.UTF_8))) {
+            String first = r.readLine();
+            if (first == null || !first.equals("#URL\t" + cleanForCache(expectedUrl))) {
+                return map; // অন্য লিংকের পুরোনো ক্যাশ — ব্যবহার হবে না
+            }
+            String line;
+            while ((line = r.readLine()) != null) {
+                String[] p = line.split("\t", -1);
+                if (p.length >= 1 && !TextUtils.isEmpty(p[0])) {
+                    map.put(p[0], new SheetDetails(p.length > 1 ? p[1] : "", p.length > 2 ? p[2] : ""));
+                }
+            }
+        } catch (Exception ex) {
+            ex.printStackTrace();
+        }
+        return map;
+    }
+
+    private String cleanForCache(String s) {
+        if (s == null) return "";
+        return s.replace("\t", " ").replace("\r", " ").replace("\n", " ");
+    }
+
+    /** অ্যাপ খোলার সাথে সাথে ফোনে সেভ করা ডেটা লোড করে — ইন্টারনেট লাগে না। */
+    private void loadCachedSheetData() {
+        final String stockUrl = getEffectiveUrl(PREF_URL_STOCK, STOCK_SHEET_CSV_URL);
+        if (TextUtils.isEmpty(stockUrl)) return;
+        final boolean syncPurchase = sharedPreferences.getBoolean(PREF_SYNC_PURCHASE_ON, true);
+        final boolean syncSold = sharedPreferences.getBoolean(PREF_SYNC_SOLD_ON, true);
+        final String purchaseUrl = getEffectiveUrl(PREF_URL_PURCHASE, PURCHASE_SHEET_CSV_URL);
+        final String soldCurrentUrl = getEffectiveUrl(PREF_URL_SOLD_CURRENT, CURRENT_MONTH_SALES_CSV_URL);
+        final String soldAdvancedUrl = getEffectiveUrl(PREF_URL_SOLD_ADVANCED, ADVANCED_SALES_CSV_URL);
+        final String soldMainUrl = getEffectiveUrl(PREF_URL_SOLD_MAIN, MAIN_SALES_CSV_URL);
+
+        // একই networkExecutor-এ চলে, তাই এটা শেষ হওয়ার পরেই অনলাইন সিঙ্ক শুরু হবে (ক্রম ঠিক থাকে)
+        networkExecutor.execute(() -> {
+            Map<String, SheetDetails> cStock = loadSheetCache(CACHE_STOCK, stockUrl);
+            Map<String, SheetDetails> cPurchase = syncPurchase ? loadSheetCache(CACHE_PURCHASE, purchaseUrl) : new LinkedHashMap<>();
+            Map<String, SheetDetails> cCurrent = syncSold ? loadSheetCache(CACHE_SOLD_CURRENT, soldCurrentUrl) : new LinkedHashMap<>();
+            Map<String, SheetDetails> cAdvanced = syncSold ? loadSheetCache(CACHE_SOLD_ADVANCED, soldAdvancedUrl) : new LinkedHashMap<>();
+            Map<String, SheetDetails> cMain = syncSold ? loadSheetCache(CACHE_SOLD_MAIN, soldMainUrl) : new LinkedHashMap<>();
+
+            mainHandler.post(() -> {
+                stockSheetMap = cStock;
+                purchaseSheetMap = cPurchase;
+                currentMonthSalesMap = cCurrent;
+                advancedSalesMap = cAdvanced;
+                mainSalesMap = cMain;
+                applySheetDataToUi(true);
+            });
+        });
+    }
+
+    /**
+     * Google Sheet থেকে CSV ডাউনলোড করে।
+     * সফল হলে ম্যাপ দেয়; ইন্টারনেট না থাকলে বা কোনো সমস্যা হলে null দেয়
+     * (যাতে পুরোনো সেভ করা ডেটা ভুল করে খালি ডেটা দিয়ে মুছে না যায়)।
+     */
     private Map<String, SheetDetails> downloadChassisMapFromCsv(String csvUrl) {
         Map<String, SheetDetails> resultMap = new LinkedHashMap<>();
-        if (TextUtils.isEmpty(csvUrl)) return resultMap;
+        if (TextUtils.isEmpty(csvUrl)) return null;
         HttpURLConnection connection = null;
         try {
             URL url = new URL(csvUrl);
@@ -465,7 +620,8 @@ public class MainActivity extends AppCompatActivity {
             connection.setConnectTimeout(15000);
             connection.setReadTimeout(15000);
             connection.setRequestMethod("GET");
-            BufferedReader reader = new BufferedReader(new InputStreamReader(connection.getInputStream()));
+            if (connection.getResponseCode() != HttpURLConnection.HTTP_OK) return null;
+            BufferedReader reader = new BufferedReader(new InputStreamReader(connection.getInputStream(), StandardCharsets.UTF_8));
             String line;
             boolean headerSkipped = false;
             int chassisCol = 1;
@@ -473,12 +629,7 @@ public class MainActivity extends AppCompatActivity {
             int vendorCol = 3;
 
             while ((line = reader.readLine()) != null) {
-                // পুরোনো বাগ: TextUtils.isEmpty(line.trim()) দিয়ে শুধু সম্পূর্ণ ফাঁকা লাইন ধরা যেত।
-                // কিন্তু গুগল শিট export এর শুরুতে ",,,,," এর মতো একটা লাইন থাকে (কমা আছে কিন্তু
-                // কোনো লেখা নেই) — trim() দিয়ে এটা ধরা পড়তো না, তাই সেটাকেই ভুলভাবে হেডার
-                // ধরে নেওয়া হতো, এবং আসল হেডার ("CHASSIS NO, PURCHASE DATE, VENDOR...") ডেটা-রো
-                // ভেবে স্কিপ হয়ে যেত — এই কারণেই PDF-এ Purchase Date আর Vendor ফাঁকা আসছিল।
-                // isBlankCsvLine() এখন কমা/কোট/স্পেস সব বাদ দিয়ে আসলেই লাইনটা ফাঁকা কিনা দেখে।
+                // ",,,,," এর মতো ফাঁকা লাইন বাদ — না হলে সেটাকেই ভুলভাবে হেডার ধরা হতো
                 if (isBlankCsvLine(line)) continue;
                 String[] cols = parseCsvLine(line);
                 if (!headerSkipped) {
@@ -504,6 +655,7 @@ public class MainActivity extends AppCompatActivity {
             reader.close();
         } catch (Exception e) {
             e.printStackTrace();
+            return null; // ইন্টারনেট নেই / টাইমআউট — পুরোনো ডেটা রেখে দাও
         } finally {
             if (connection != null) connection.disconnect();
         }
@@ -613,20 +765,75 @@ public class MainActivity extends AppCompatActivity {
                 .setTitle("Sync Settings")
                 .setView(scrollView)
                 .setPositiveButton("Save & Sync", (dialog, which) -> {
-                    SharedPreferences.Editor editor = sharedPreferences.edit();
-                    editor.putBoolean(PREF_SYNC_PURCHASE_ON, cbSyncPurchase.isChecked());
-                    editor.putBoolean(PREF_SYNC_SOLD_ON, cbSyncSold.isChecked());
-                    editor.putString(PREF_URL_STOCK, urlStock.getText().toString().trim());
-                    editor.putString(PREF_URL_PURCHASE, urlPurchase.getText().toString().trim());
-                    editor.putString(PREF_URL_SOLD_CURRENT, urlSoldCurrent.getText().toString().trim());
-                    editor.putString(PREF_URL_SOLD_ADVANCED, urlSoldAdvanced.getText().toString().trim());
-                    editor.putString(PREF_URL_SOLD_MAIN, urlSoldMain.getText().toString().trim());
-                    editor.apply();
-                    Toast.makeText(this, "Settings সেভ হয়েছে। সিঙ্ক শুরু হচ্ছে...", Toast.LENGTH_SHORT).show();
-                    fetchSheetDataFromGoogle(false);
+                    final boolean purchaseOn = cbSyncPurchase.isChecked();
+                    final boolean soldOn = cbSyncSold.isChecked();
+                    final String newStock = urlStock.getText().toString().trim();
+                    final String newPurchase = urlPurchase.getText().toString().trim();
+                    final String newSoldCurrent = urlSoldCurrent.getText().toString().trim();
+                    final String newSoldAdvanced = urlSoldAdvanced.getText().toString().trim();
+                    final String newSoldMain = urlSoldMain.getText().toString().trim();
+
+                    // আগে যে Stock Sheet লিংক সেভ ছিল
+                    String oldStock = sharedPreferences.getString(PREF_URL_STOCK, "").trim();
+                    boolean hasReports = !stockMatchList.isEmpty() || !soldMatchList.isEmpty()
+                            || !purchaseMatchList.isEmpty() || !unknownList.isEmpty();
+
+                    // Stock Sheet লিংক বদলানো হলে (অন্য ব্যবসা/অন্য শিট) — আগের স্ক্যান রিপোর্ট
+                    // যেন নতুন শিটের সাথে মিশে না যায়, তাই আগে জিজ্ঞেস করে সব রিপোর্ট মুছে 0 করা হয়।
+                    if (!TextUtils.isEmpty(oldStock) && !oldStock.equals(newStock) && hasReports) {
+                        new AlertDialog.Builder(this)
+                                .setTitle("Stock Sheet লিংক বদলানো হয়েছে")
+                                .setMessage("আপনি নতুন একটা Stock Sheet লিংক দিয়েছেন।\n\n"
+                                        + "Save করলে আগের সব স্ক্যান রিপোর্ট (Stock, Sold, Purchase, Unknown) "
+                                        + "মুছে 0 হয়ে যাবে — আর ফেরত আনা যাবে না।\n\n"
+                                        + "দরকার হলে আগে Export থেকে PDF/CSV রিপোর্ট সেভ করে নিন।\n\n"
+                                        + "এগিয়ে যাবেন?")
+                                .setPositiveButton("হ্যাঁ, মুছে Save করুন", (d2, w2) -> {
+                                    clearAllScannedReportsSilently();
+                                    saveSyncSettingsAndSync(purchaseOn, soldOn, newStock, newPurchase,
+                                            newSoldCurrent, newSoldAdvanced, newSoldMain);
+                                    Toast.makeText(this, "আগের সব রিপোর্ট মুছে 0 করা হয়েছে", Toast.LENGTH_LONG).show();
+                                })
+                                .setNegativeButton("না, বাতিল", (d2, w2) ->
+                                        Toast.makeText(this, "কিছুই বদলানো হয়নি", Toast.LENGTH_SHORT).show())
+                                .setCancelable(false)
+                                .show();
+                    } else {
+                        saveSyncSettingsAndSync(purchaseOn, soldOn, newStock, newPurchase,
+                                newSoldCurrent, newSoldAdvanced, newSoldMain);
+                    }
                 })
                 .setNegativeButton("Cancel", null)
                 .show();
+    }
+
+    /** Sync Settings সেভ করে, সেভ করা ডেটা নতুন করে লোড করে, তারপর সিঙ্ক শুরু করে। */
+    private void saveSyncSettingsAndSync(boolean purchaseOn, boolean soldOn, String stock, String purchase,
+                                         String soldCurrent, String soldAdvanced, String soldMain) {
+        SharedPreferences.Editor editor = sharedPreferences.edit();
+        editor.putBoolean(PREF_SYNC_PURCHASE_ON, purchaseOn);
+        editor.putBoolean(PREF_SYNC_SOLD_ON, soldOn);
+        editor.putString(PREF_URL_STOCK, stock);
+        editor.putString(PREF_URL_PURCHASE, purchase);
+        editor.putString(PREF_URL_SOLD_CURRENT, soldCurrent);
+        editor.putString(PREF_URL_SOLD_ADVANCED, soldAdvanced);
+        editor.putString(PREF_URL_SOLD_MAIN, soldMain);
+        editor.apply();
+        Toast.makeText(this, "Settings সেভ হয়েছে। সিঙ্ক শুরু হচ্ছে...", Toast.LENGTH_SHORT).show();
+        // লিংক বদলালে পুরোনো লিংকের সেভ করা ডেটা আর ব্যবহার হবে না — নতুন করে লোড
+        loadCachedSheetData();
+        fetchSheetDataFromGoogle(false);
+    }
+
+    /** কোনো প্রশ্ন না করে সব স্ক্যান রিপোর্ট (Stock/Sold/Purchase/Unknown) মুছে 0 করে। */
+    private void clearAllScannedReportsSilently() {
+        stockMatchList.clear();
+        soldMatchList.clear();
+        purchaseMatchList.clear();
+        unknownList.clear();
+        rebuildScannedSet();
+        saveReportsToStorage();
+        tvLastScanned.setText("Last: None (Total: 0)");
     }
 
     private TextView labelFor(String text) {
