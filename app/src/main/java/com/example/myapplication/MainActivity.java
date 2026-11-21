@@ -12,6 +12,10 @@ import android.graphics.Paint;
 import android.graphics.pdf.PdfDocument;
 import android.media.Image;
 import android.net.Uri;
+import androidx.activity.result.ActivityResultLauncher;
+import androidx.activity.result.contract.ActivityResultContracts;
+import org.json.JSONArray;
+import org.json.JSONObject;
 import android.os.Bundle;
 import android.os.Environment;
 import android.os.Handler;
@@ -244,6 +248,13 @@ public class MainActivity extends AppCompatActivity {
             isScannerOn = !isScannerOn;
             btnScannerStatus.setText("Scanner Status: " + (isScannerOn ? "ON" : "OFF"));
             btnScannerStatus.setBackgroundColor(isScannerOn ? 0xFF2E7D32 : 0xFFC62828);
+            // OFF হলে ক্যামেরা পুরো বন্ধ + স্ক্যান এরিয়া কালো; ON হলে ক্যামেরা আবার চালু
+            if (isScannerOn) {
+                previewView.setForeground(null);
+                checkPermissions(); // পারমিশন থাকলে startCamera() চালু করবে
+            } else {
+                stopCamera();
+            }
         });
 
         btnSyncSheets.setOnClickListener(v -> fetchSheetDataFromGoogle(false));
@@ -761,50 +772,183 @@ public class MainActivity extends AppCompatActivity {
         layout.addView(labelFor("Main Sales Sheet:"));
         layout.addView(urlSoldMain);
 
-        new AlertDialog.Builder(this)
+        // ==== Backup / Restore বাটন (Uninstall বা নতুন ফোনে অ্যাপ বসালে লিংক ফেরত আনার জন্য) ====
+        TextView backupTitle = labelFor("\n💾 Settings Backup / Restore:");
+        layout.addView(backupTitle);
+        TextView backupHint = new TextView(this);
+        backupHint.setText("Backup চাপলে সেভ করা শিট লিংক + Location লিস্ট একটা ফাইলে সেভ হবে (Download/Drive/WhatsApp-এ রাখুন)। "
+                + "পরে অ্যাপ Uninstall করতে হলে বা নতুন ফোনে Restore চেপে সেই ফাইল বেছে নিলেই সব ফেরত আসবে।\n"
+                + "(নোট: Backup-এ শুধু আগে Save করা লিংক যায় — নতুন লিংক দিলে আগে Save & Sync করুন।)");
+        backupHint.setTextSize(12);
+        layout.addView(backupHint);
+
+        LinearLayout backupRow = new LinearLayout(this);
+        backupRow.setOrientation(LinearLayout.HORIZONTAL);
+        Button btnBackup = new Button(this);
+        btnBackup.setText("Backup Settings");
+        Button btnRestore = new Button(this);
+        btnRestore.setText("Restore Settings");
+        LinearLayout.LayoutParams half = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
+        half.setMargins(0, 0, pad / 2, 0);
+        backupRow.addView(btnBackup, half);
+        backupRow.addView(btnRestore, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        layout.addView(backupRow);
+
+        final AlertDialog settingsDialog = new AlertDialog.Builder(this)
                 .setTitle("Sync Settings")
                 .setView(scrollView)
-                .setPositiveButton("Save & Sync", (dialog, which) -> {
-                    final boolean purchaseOn = cbSyncPurchase.isChecked();
-                    final boolean soldOn = cbSyncSold.isChecked();
-                    final String newStock = urlStock.getText().toString().trim();
-                    final String newPurchase = urlPurchase.getText().toString().trim();
-                    final String newSoldCurrent = urlSoldCurrent.getText().toString().trim();
-                    final String newSoldAdvanced = urlSoldAdvanced.getText().toString().trim();
-                    final String newSoldMain = urlSoldMain.getText().toString().trim();
+                .setPositiveButton("Save & Sync", (dialog, which) -> applySyncSettingsWithCheck(
+                        cbSyncPurchase.isChecked(),
+                        cbSyncSold.isChecked(),
+                        urlStock.getText().toString().trim(),
+                        urlPurchase.getText().toString().trim(),
+                        urlSoldCurrent.getText().toString().trim(),
+                        urlSoldAdvanced.getText().toString().trim(),
+                        urlSoldMain.getText().toString().trim()))
+                .setNegativeButton("Cancel", null)
+                .create();
 
-                    // আগে যে Stock Sheet লিংক সেভ ছিল
-                    String oldStock = sharedPreferences.getString(PREF_URL_STOCK, "").trim();
-                    boolean hasReports = !stockMatchList.isEmpty() || !soldMatchList.isEmpty()
-                            || !purchaseMatchList.isEmpty() || !unknownList.isEmpty();
+        btnBackup.setOnClickListener(v -> {
+            if (TextUtils.isEmpty(sharedPreferences.getString(PREF_URL_STOCK, ""))) {
+                Toast.makeText(this, "আগে লিংক বসিয়ে Save & Sync করুন, তারপর Backup নিন", Toast.LENGTH_LONG).show();
+                return;
+            }
+            settingsDialog.dismiss();
+            String date = new SimpleDateFormat("dd-MM-yyyy", Locale.ENGLISH).format(new Date());
+            backupSettingsLauncher.launch("StockChecking_Settings_Backup_" + date + ".json");
+        });
+        btnRestore.setOnClickListener(v -> {
+            settingsDialog.dismiss();
+            restoreSettingsLauncher.launch(new String[]{"*/*"});
+        });
 
-                    // Stock Sheet লিংক বদলানো হলে (অন্য ব্যবসা/অন্য শিট) — আগের স্ক্যান রিপোর্ট
-                    // যেন নতুন শিটের সাথে মিশে না যায়, তাই আগে জিজ্ঞেস করে সব রিপোর্ট মুছে 0 করা হয়।
-                    if (!TextUtils.isEmpty(oldStock) && !oldStock.equals(newStock) && hasReports) {
-                        new AlertDialog.Builder(this)
-                                .setTitle("Stock Sheet লিংক বদলানো হয়েছে")
-                                .setMessage("আপনি নতুন একটা Stock Sheet লিংক দিয়েছেন।\n\n"
-                                        + "Save করলে আগের সব স্ক্যান রিপোর্ট (Stock, Sold, Purchase, Unknown) "
-                                        + "মুছে 0 হয়ে যাবে — আর ফেরত আনা যাবে না।\n\n"
-                                        + "দরকার হলে আগে Export থেকে PDF/CSV রিপোর্ট সেভ করে নিন।\n\n"
-                                        + "এগিয়ে যাবেন?")
-                                .setPositiveButton("হ্যাঁ, মুছে Save করুন", (d2, w2) -> {
-                                    clearAllScannedReportsSilently();
-                                    saveSyncSettingsAndSync(purchaseOn, soldOn, newStock, newPurchase,
-                                            newSoldCurrent, newSoldAdvanced, newSoldMain);
-                                    Toast.makeText(this, "আগের সব রিপোর্ট মুছে 0 করা হয়েছে", Toast.LENGTH_LONG).show();
-                                })
-                                .setNegativeButton("না, বাতিল", (d2, w2) ->
-                                        Toast.makeText(this, "কিছুই বদলানো হয়নি", Toast.LENGTH_SHORT).show())
-                                .setCancelable(false)
-                                .show();
-                    } else {
+        settingsDialog.show();
+    }
+
+    /**
+     * নতুন Sync Settings সেভ করার আগে চেক করে: Stock Sheet লিংক বদলালে এবং আগের স্ক্যান
+     * রিপোর্ট থাকলে — জিজ্ঞেস করে সব রিপোর্ট মুছে 0 করা হয় (নতুন শিটের সাথে যেন না মেশে)।
+     * Save & Sync বাটন এবং Restore — দুই জায়গা থেকেই এটা ব্যবহার হয়।
+     */
+    private void applySyncSettingsWithCheck(boolean purchaseOn, boolean soldOn, String newStock,
+                                            String newPurchase, String newSoldCurrent,
+                                            String newSoldAdvanced, String newSoldMain) {
+        String oldStock = sharedPreferences.getString(PREF_URL_STOCK, "").trim();
+        boolean hasReports = !stockMatchList.isEmpty() || !soldMatchList.isEmpty()
+                || !purchaseMatchList.isEmpty() || !unknownList.isEmpty();
+
+        if (!TextUtils.isEmpty(oldStock) && !oldStock.equals(newStock) && hasReports) {
+            new AlertDialog.Builder(this)
+                    .setTitle("Stock Sheet লিংক বদলানো হয়েছে")
+                    .setMessage("আপনি নতুন একটা Stock Sheet লিংক দিয়েছেন।\n\n"
+                            + "Save করলে আগের সব স্ক্যান রিপোর্ট (Stock, Sold, Purchase, Unknown) "
+                            + "মুছে 0 হয়ে যাবে — আর ফেরত আনা যাবে না।\n\n"
+                            + "দরকার হলে আগে Export থেকে PDF/CSV রিপোর্ট সেভ করে নিন।\n\n"
+                            + "এগিয়ে যাবেন?")
+                    .setPositiveButton("হ্যাঁ, মুছে Save করুন", (d2, w2) -> {
+                        clearAllScannedReportsSilently();
                         saveSyncSettingsAndSync(purchaseOn, soldOn, newStock, newPurchase,
                                 newSoldCurrent, newSoldAdvanced, newSoldMain);
-                    }
-                })
-                .setNegativeButton("Cancel", null)
-                .show();
+                        Toast.makeText(this, "আগের সব রিপোর্ট মুছে 0 করা হয়েছে", Toast.LENGTH_LONG).show();
+                    })
+                    .setNegativeButton("না, বাতিল", (d2, w2) ->
+                            Toast.makeText(this, "কিছুই বদলানো হয়নি", Toast.LENGTH_SHORT).show())
+                    .setCancelable(false)
+                    .show();
+        } else {
+            saveSyncSettingsAndSync(purchaseOn, soldOn, newStock, newPurchase,
+                    newSoldCurrent, newSoldAdvanced, newSoldMain);
+        }
+    }
+
+    // ================== Settings Backup / Restore ==================
+
+    // ফোনের "Save as" স্ক্রিন খুলে ব্যবহারকারী যেখানে চায় (Download, Drive...) সেখানে ফাইল সেভ
+    private final ActivityResultLauncher<String> backupSettingsLauncher =
+            registerForActivityResult(new ActivityResultContracts.CreateDocument("application/json"),
+                    uri -> { if (uri != null) writeSettingsBackup(uri); });
+
+    // ফোনের ফাইল বেছে নেওয়ার স্ক্রিন খুলে Backup ফাইল বেছে নেওয়া
+    private final ActivityResultLauncher<String[]> restoreSettingsLauncher =
+            registerForActivityResult(new ActivityResultContracts.OpenDocument(),
+                    uri -> { if (uri != null) readSettingsBackup(uri); });
+
+    private void writeSettingsBackup(Uri uri) {
+        try {
+            JSONObject json = new JSONObject();
+            json.put("app", "STOCK_CHECKING_SETTINGS");
+            json.put("version", 1);
+            json.put("savedAt", new SimpleDateFormat("dd-MM-yyyy hh:mm a", Locale.ENGLISH).format(new Date()));
+            json.put("syncPurchase", sharedPreferences.getBoolean(PREF_SYNC_PURCHASE_ON, true));
+            json.put("syncSold", sharedPreferences.getBoolean(PREF_SYNC_SOLD_ON, true));
+            json.put("urlStock", sharedPreferences.getString(PREF_URL_STOCK, ""));
+            json.put("urlPurchase", sharedPreferences.getString(PREF_URL_PURCHASE, ""));
+            json.put("urlSoldCurrent", sharedPreferences.getString(PREF_URL_SOLD_CURRENT, ""));
+            json.put("urlSoldAdvanced", sharedPreferences.getString(PREF_URL_SOLD_ADVANCED, ""));
+            json.put("urlSoldMain", sharedPreferences.getString(PREF_URL_SOLD_MAIN, ""));
+            JSONArray locs = new JSONArray();
+            for (String l : knownLocations) locs.put(l);
+            json.put("locations", locs);
+
+            try (java.io.OutputStream os = getContentResolver().openOutputStream(uri)) {
+                if (os == null) throw new Exception("ফাইল খোলা যায়নি");
+                os.write(json.toString(2).getBytes(StandardCharsets.UTF_8));
+            }
+            Toast.makeText(this, "✅ Settings Backup সেভ হয়েছে", Toast.LENGTH_LONG).show();
+        } catch (Exception e) {
+            e.printStackTrace();
+            Toast.makeText(this, "Backup ব্যর্থ: " + e.getMessage(), Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private void readSettingsBackup(Uri uri) {
+        try {
+            StringBuilder sb = new StringBuilder();
+            try (java.io.InputStream is = getContentResolver().openInputStream(uri);
+                 BufferedReader r = new BufferedReader(new InputStreamReader(is, StandardCharsets.UTF_8))) {
+                String line;
+                while ((line = r.readLine()) != null) sb.append(line).append('\n');
+            }
+            JSONObject json = new JSONObject(sb.toString());
+            if (!"STOCK_CHECKING_SETTINGS".equals(json.optString("app"))) {
+                Toast.makeText(this, "এটা STOCK CHECKING-এর Backup ফাইল না!", Toast.LENGTH_LONG).show();
+                return;
+            }
+
+            // Location লিস্ট যোগ (আগের গুলো থাকবে, নতুন গুলো যোগ হবে)
+            JSONArray locs = json.optJSONArray("locations");
+            if (locs != null) {
+                for (int i = 0; i < locs.length(); i++) {
+                    String l = locs.optString(i, "").trim();
+                    if (TextUtils.isEmpty(l)) continue;
+                    boolean exists = false;
+                    for (String k : knownLocations) if (k.equalsIgnoreCase(l)) { exists = true; break; }
+                    if (!exists) knownLocations.add(l);
+                }
+                saveKnownLocations();
+                refreshLocationSuggestionAdapter();
+            }
+
+            final boolean purchaseOn = json.optBoolean("syncPurchase", true);
+            final boolean soldOn = json.optBoolean("syncSold", true);
+            final String stock = json.optString("urlStock", "").trim();
+            final String purchase = json.optString("urlPurchase", "").trim();
+            final String soldCurrent = json.optString("urlSoldCurrent", "").trim();
+            final String soldAdvanced = json.optString("urlSoldAdvanced", "").trim();
+            final String soldMain = json.optString("urlSoldMain", "").trim();
+
+            new AlertDialog.Builder(this)
+                    .setTitle("Restore করবেন?")
+                    .setMessage("Backup-এর তারিখ: " + json.optString("savedAt", "জানা নেই") + "\n\n"
+                            + "এই Backup-এর শিট লিংকগুলো বসানো হবে এবং সিঙ্ক শুরু হবে।")
+                    .setPositiveButton("হ্যাঁ, Restore করুন", (d, w) -> applySyncSettingsWithCheck(
+                            purchaseOn, soldOn, stock, purchase, soldCurrent, soldAdvanced, soldMain))
+                    .setNegativeButton("না", null)
+                    .show();
+        } catch (Exception e) {
+            e.printStackTrace();
+            Toast.makeText(this, "Restore ব্যর্থ — ফাইলটা ঠিক Backup ফাইল কিনা দেখুন", Toast.LENGTH_LONG).show();
+        }
     }
 
     /** Sync Settings সেভ করে, সেভ করা ডেটা নতুন করে লোড করে, তারপর সিঙ্ক শুরু করে। */
@@ -901,6 +1045,8 @@ public class MainActivity extends AppCompatActivity {
         cameraProviderFuture.addListener(() -> {
             try {
                 ProcessCameraProvider cameraProvider = cameraProviderFuture.get();
+                if (!isScannerOn) return; // Scanner OFF থাকলে ক্যামেরা চালু হবে না
+                previewView.setForeground(null);
                 Preview preview = new Preview.Builder().build();
                 preview.setSurfaceProvider(previewView.getSurfaceProvider());
                 ImageAnalysis imageAnalysis = new ImageAnalysis.Builder()
@@ -911,6 +1057,22 @@ public class MainActivity extends AppCompatActivity {
             } catch (ExecutionException | InterruptedException e) {
                 e.printStackTrace();
             }
+        }, ContextCompat.getMainExecutor(this));
+    }
+
+    /** ক্যামেরা পুরোপুরি বন্ধ করে (ব্যাটারি বাঁচে) এবং স্ক্যান এরিয়া কালো করে দেয়। */
+    private void stopCamera() {
+        ListenableFuture<ProcessCameraProvider> cameraProviderFuture = ProcessCameraProvider.getInstance(this);
+        cameraProviderFuture.addListener(() -> {
+            try {
+                ProcessCameraProvider cameraProvider = cameraProviderFuture.get();
+                cameraProvider.unbindAll();
+            } catch (ExecutionException | InterruptedException e) {
+                e.printStackTrace();
+            }
+            camera = null;
+            // শেষ ছবিটা যেন আটকে না থাকে — উপরে কালো পর্দা
+            previewView.setForeground(new android.graphics.drawable.ColorDrawable(Color.BLACK));
         }, ContextCompat.getMainExecutor(this));
     }
 
